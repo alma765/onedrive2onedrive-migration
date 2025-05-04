@@ -4,37 +4,89 @@ import json
 import sys
 from pathlib import Path
 
-def run_rclone_command(command):
+def run_rclone_command(command, show_output=False):
     """Run rclone command and return output"""
     try:
-        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', check=True)
-        return result.stdout
+        if show_output:
+            # Run with output shown in real-time
+            result = subprocess.run(command, check=True, text=True)
+            return None
+        else:
+            # Run with captured output
+            result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', check=True)
+            return result.stdout
     except subprocess.CalledProcessError as e:
         print(f"Error running rclone command: {e}")
         print(f"Error output: {e.stderr}")
         return None
 
+def get_existing_remotes():
+    """Get list of existing rclone remote configurations"""
+    output = run_rclone_command(["./rclone", "listremotes"])
+    if not output:
+        return []
+    return [remote.strip(':') for remote in output.split('\n') if remote.strip()]
+
 def configure_rclone():
     """Configure rclone for both source and destination OneDrive accounts"""
     print("Let's configure rclone for your OneDrive accounts.")
     
-    # Configure source OneDrive
+    # Get existing remotes
+    existing_remotes = get_existing_remotes()
+    if existing_remotes:
+        print("\nFound existing rclone configurations:")
+        for i, remote in enumerate(existing_remotes, 1):
+            print(f"{i}. {remote}")
+        print("\nWould you like to use existing configurations?")
+        use_existing = input("Enter 'yes' to use existing, 'no' to configure new: ").lower()
+        
+        if use_existing == 'yes':
+            # Select source remote
+            print("\nSelect source OneDrive account:")
+            for i, remote in enumerate(existing_remotes, 1):
+                print(f"{i}. {remote}")
+            while True:
+                try:
+                    source_choice = int(input("\nEnter the number for source account: "))
+                    if 1 <= source_choice <= len(existing_remotes):
+                        source_name = existing_remotes[source_choice - 1]
+                        break
+                    print("Invalid selection. Please try again.")
+                except ValueError:
+                    print("Please enter a valid number.")
+            
+            # Select destination remote
+            print("\nSelect destination OneDrive account:")
+            for i, remote in enumerate(existing_remotes, 1):
+                print(f"{i}. {remote}")
+            while True:
+                try:
+                    dest_choice = int(input("\nEnter the number for destination account: "))
+                    if 1 <= dest_choice <= len(existing_remotes) and dest_choice != source_choice:
+                        dest_name = existing_remotes[dest_choice - 1]
+                        break
+                    print("Invalid selection. Please try again.")
+                except ValueError:
+                    print("Please enter a valid number.")
+            
+            return source_name, dest_name
+    
+    # Configure new remotes if no existing ones or user chose not to use them
     print("\n=== Configuring Source OneDrive Account ===")
     source_name = input("Enter a name for your source OneDrive (e.g., 'source'): ")
     print("\nA browser window will open. Please follow these steps:")
     print("1. Log in to your Microsoft account")
     print("2. Grant the requested permissions")
     print("3. Copy the authentication code back to this window")
-    run_rclone_command(["rclone", "config", "create", source_name, "onedrive"])
+    run_rclone_command(["./rclone", "config", "create", source_name, "onedrive"])
     
-    # Configure destination OneDrive
     print("\n=== Configuring Destination OneDrive Account ===")
     dest_name = input("Enter a name for your destination OneDrive (e.g., 'dest'): ")
     print("\nA browser window will open. Please follow these steps:")
     print("1. Log in to your Microsoft account")
     print("2. Grant the requested permissions")
     print("3. Copy the authentication code back to this window")
-    run_rclone_command(["rclone", "config", "create", dest_name, "onedrive"])
+    run_rclone_command(["./rclone", "config", "create", dest_name, "onedrive"])
     
     return source_name, dest_name
 
@@ -81,31 +133,34 @@ def transfer_files(source_remote, source_folder, dest_remote, dest_folder, opera
     print(f"\nStarting {operation_type} from {source_remote}:{source_folder} to {dest_remote}:{dest_folder}")
     
     # Create destination folder if it doesn't exist
-    run_rclone_command(["rclone", "mkdir", f"{dest_remote}:{dest_folder}"])
+    run_rclone_command(["./rclone", "mkdir", f"{dest_remote}:{dest_folder}"])
     
-    # Perform the transfer
-    command = [
-        "rclone",
-        "copy",  # Always use copy as base command
-        f"{source_remote}:{source_folder}",
-        f"{dest_remote}:{dest_folder}",
-        "--progress"
-    ]
+    # Set up base command
+    command = ["./rclone"]
     
     # Add operation-specific options
+    if operation_type == "migrate":
+        command.extend(["copy", "--ignore-existing"])
+    else:
+        command.append(operation_type)  # "copy" or "sync"
+    
+    # Add source and destination
+    command.extend([
+        f"{source_remote}:{source_folder}",
+        f"{dest_remote}:{dest_folder}",
+        "--progress",
+        "-v"  # Add verbose output
+    ])
+    
+    # Add additional options for sync
     if operation_type == "sync":
-        command[1] = "sync"  # Change to sync command
         command.extend([
             "--delete-after",  # Delete files in destination that don't exist in source
             "--delete-excluded"  # Delete excluded files from destination
         ])
-    elif operation_type == "migrate":
-        command.extend([
-            "--ignore-existing",  # Skip files that exist in destination
-            "--checksum"  # Use checksum comparison for better accuracy
-        ])
     
-    run_rclone_command(command)
+    print("\nTransfer in progress... You'll see the progress below:\n")
+    run_rclone_command(command, show_output=True)
     
     print(f"\n{operation_type.capitalize()} completed!")
 
