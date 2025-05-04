@@ -5,6 +5,7 @@ __pycache__/
 
 # Rclone
 rclone.conf
+rclone.exe
 
 # IDE
 .vscode/
